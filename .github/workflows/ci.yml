@@ -2,28 +2,78 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
 
 permissions:
   contents: read
+  checks: write
   issues: write
   pull-requests: write
 
 jobs:
-  comment:
+  ci:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Add PR test results comment
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Configure Poetry
+        run: poetry config virtualenvs.in-project true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+
+      - name: Run tests with coverage
+        run: |
+          poetry run coverage run -m pytest
+          poetry run coverage report -m > coverage.txt
+
+      - name: Publish coverage results
         uses: actions/github-script@v7
         with:
           script: |
-            const issue_number = context.issue.number;
+            const fs = require("fs");
+
+            let coverage = "Coverage report was not generated.";
+
+            if (fs.existsSync("coverage.txt")) {
+              coverage = fs.readFileSync("coverage.txt", "utf8");
+            }
+
+            const body = [
+              "## Coverage report",
+              "",
+              "```text",
+              coverage,
+              "```"
+            ].join("\n");
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number,
-              body: "Test results from workflow: workflow completed successfully."
+              issue_number: context.issue.number,
+              body
             });
+
+      - name: Review agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+        run: poetry run python agent.py "$GITHUB_TOKEN" "$REPOSITORY" "$PR_NUMBER" "$OPENAI_API_KEY" "$OPENAI_BASE_URL"
